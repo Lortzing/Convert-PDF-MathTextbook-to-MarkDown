@@ -35,7 +35,7 @@ class ConversionConfig:
     """Configuration for PDF to Markdown conversion."""
 
     model: str = "qwen3-vl-plus"
-    dpi: int = 300
+    dpi: int = 100
     prompt: str = PROMPT_TEMPLATE
     image_format: str = "PNG"
     extra_instructions: Sequence[str] = field(default_factory=tuple)
