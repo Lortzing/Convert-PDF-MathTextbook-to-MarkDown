@@ -17,17 +17,33 @@ from pdf2image import convert_from_path
 
 
 PROMPT_TEMPLATE = (
+    # 识别规则（数学/Markdown/无代码围栏）
     "You are an OCR expert who rewrites textbook pages as Markdown. "
     "Recognise mathematics precisely and emit inline math between $ and block math "
     "between $$ fences using LaTeX. Preserve headings, numbered equations, "
     "and tables when possible. Return pure GitHub-flavoured Markdown only. "
-    "Don't include fences like ``` or ```markdown; reply plain text in Markdown. "
-    "Ignore page numbers and running headers/footers. "
-    "Wrap the main extracted content with <|content|> ... <|content|>. "
-    "Only output titles/subtitles that truly belong to the content (no dots leaders or page references)."
+    "Do NOT include code fences like ``` or ```markdown; reply plain text in Markdown.\n"
+
+    # 目录页规则（去掉点线与页码）
+    "If a page looks like a table of contents, extract only real headings/subheadings, "
+    "and strictly remove dot leaders (e.g., '......', '···') and page numbers at the line ends or in brackets. "
+    "Do not output page numbers anywhere.\n"
+
+    # 配图占位规则（图像）
+    "For figures/illustrations, output a one-line placeholder using Markdown image syntax with an empty URL, "
+    "and a short description as alt text, e.g., '![figure: brief description]()'. "
+    "Do not attempt to draw the image or include any binary data.\n"
+
+    # 内容包裹规则（只把真正正文包进 content）
+    "Only the actual body content (paragraphs, equations, tables, figure placeholders) must be wrapped with "
+    "<|content|> ... </|content|>. Headings should be outside of this block as normal Markdown headings.\n"
+
+    # 其他
+    "Ignore page numbers and running headers/footers."
 )
 
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+?)\s*$', re.M)  # 匹配 #/##/... 标题行
+_CONTENT_RE = re.compile(r"<\|content\|>(.*?)</\|content\|>", re.S | re.I)  # 提取 content 块（允许多段）
 
 
 @dataclass(slots=True)
@@ -51,8 +67,7 @@ class ConversionConfig:
 class PDFToMarkdownConverter:
     """Convert PDF pages into Markdown text using the OpenAI-compatible API."""
 
-    # 全量标题容器：按页序拼接，用 "\n" 间隔
-    titles: List[str]
+    titles: List[str]  # 全量标题容器：按页序拼接，用 "\n" 间隔
 
     def __init__(self, *, client: OpenAI | None = None, config: ConversionConfig | None = None) -> None:
         self.client = client or OpenAI(
@@ -99,7 +114,8 @@ class PDFToMarkdownConverter:
         images = await asyncio.to_thread(self._pdf_to_images, pdf_path)
 
         # 2) Images -> Markdown（并发、限流、保序）
-        markdown_pages = await self._images_to_markdown_bounded(
+        #    注意：results 里只放 <|content|> 的正文，不含标题
+        contents_only = await self._images_to_markdown_bounded(
             images,
             limit=self.config.image2md_concurrency,
             show_progress=self.config.show_progress,
@@ -108,10 +124,13 @@ class PDFToMarkdownConverter:
 
         # 3) 持久化（线程池异步化）
         if output_path is not None:
-            text = "\n\n".join(markdown_pages)
-            await asyncio.to_thread(output_path.write_text, text, encoding="utf-8")
+            # 先输出全量标题，再输出正文
+            titles_block = "\n".join(self.titles).strip()
+            content_block = "\n\n".join(c.strip() for c in contents_only if c and c.strip())
+            final_text = (titles_block + "\n\n" + content_block).strip() if titles_block else content_block
+            await asyncio.to_thread(output_path.write_text, final_text, encoding="utf-8")
 
-        return markdown_pages
+        return contents_only
 
     async def _images_to_markdown_bounded(
         self,
@@ -131,14 +150,16 @@ class PDFToMarkdownConverter:
             # 取“到当前为止、已知的前序页标题”
             prior_titles_text = await self._get_prior_titles_text(idx)
 
-            # 把同步网络调用放入线程池，避免阻塞事件循环
-            md = await asyncio.to_thread(self._image_to_markdown, img, idx, prior_titles_text)
+            # 调用模型
+            md_full = await asyncio.to_thread(self._image_to_markdown, img, idx, prior_titles_text)
 
-            # 解析并写回本页标题；然后重建全量 titles（按页序）
-            page_titles = self._extract_titles(md)
+            # 解析标题并写回（影响全局 titles）
+            page_titles = self._extract_titles(md_full)
             await self._update_titles(idx, page_titles)
 
-            return idx, md
+            # 只抽取 <|content|> 的正文作为结果
+            page_content = self._extract_content(md_full)
+            return idx, page_content
 
         tasks = [asyncio.create_task(worker(img, i)) for i, img in enumerate(images, start=1)]
 
@@ -147,8 +168,8 @@ class PDFToMarkdownConverter:
 
         try:
             for coro in asyncio.as_completed(tasks):
-                idx, md = await coro
-                results[idx - 1] = md
+                idx, content_only = await coro
+                results[idx - 1] = content_only
                 if pbar:
                     pbar.update(1)
         finally:
@@ -172,7 +193,7 @@ class PDFToMarkdownConverter:
             streams.append(buffer)
         return streams
 
-    # ---- 标题抽取与维护 ----
+    # ---- 标题/内容抽取与维护 ----
     @staticmethod
     def _extract_titles(md: str) -> List[str]:
         """
@@ -181,18 +202,27 @@ class PDFToMarkdownConverter:
         """
         titles: List[str] = []
         for m in _HEADING_RE.finditer(md):
-            # 还原形如 "## Title"
             level = m.group(1)
             text = m.group(2).strip()
-            # 过滤可能的点线/页码引导（常见目录点线）——尽量保守
+            # 过滤目录点线和页码
+            # 末尾页码样式如 "...... 12" 或 " ... 34" 或 "(12)"
             if text.replace('.', '').strip().isdigit():
-                # 纯数字（疑似页码）跳过
                 continue
-            if '........' in text or '···' in text:
-                # 明显目录引导点线跳过
+            if re.search(r'(?:\.{3,}|·{2,})\s*\d+\s*$', text):
+                continue
+            if re.search(r'\(\s*\d+\s*\)\s*$', text):
                 continue
             titles.append(f"{level} {text}")
         return titles
+
+    @staticmethod
+    def _extract_content(md: str) -> str:
+        """
+        抽取所有 <|content|>...</|content|> 段落，按出现顺序拼接。
+        如果不存在，返回空字符串。
+        """
+        blocks = [b.strip() for b in _CONTENT_RE.findall(md)]
+        return "\n\n".join(b for b in blocks if b)
 
     async def _get_prior_titles_text(self, page_number: int) -> str:
         """
@@ -212,25 +242,26 @@ class PDFToMarkdownConverter:
         """
         async with self._titles_lock:
             self._titles_by_page[page_number] = page_titles
-            # 重新拼接全量标题，保证顺序性
             lines: List[str] = []
             for p in sorted(self._titles_by_page.keys()):
                 lines.extend(self._titles_by_page[p])
-            self.titles = lines  # 保持为逐行列表；使用时通过 "\n".join(self.titles)
+            self.titles = lines  # 使用时通过 "\n".join(self.titles)
 
     def _image_to_markdown(self, image_stream: BytesIO, page_number: int, prior_titles_text: str) -> str:
         """Send an image to the Qwen model and return Markdown output."""
         encoded_image = base64.b64encode(image_stream.getvalue()).decode("utf-8")
         mime = f"image/{self.config.image_format.lower()}"
 
-        # —— Prompt 组合（完善版）——
-        # 1) 基础指令（数学/Markdown/不输出围栏/加 content 标签）
-        # 2) 提供“已识别的历史标题”，要求保持层级一致
-        # 3) 说明当前页码（仅作上下文，不要求输出页码）
+        # Prompt 组合
         base = self.config.build_prompt()
-        prior_block = f"\nPreviously seen titles (keep levels consistent and avoid duplicates):\n{prior_titles_text}\n" if prior_titles_text else ""
-        page_hint = f"\nThis image corresponds to textbook page {page_number}. Do not output page numbers.\n"
-
+        prior_block = (
+            f"\nPreviously seen titles (keep levels consistent and avoid duplicates):\n{prior_titles_text}\n"
+            if prior_titles_text else ""
+        )
+        page_hint = (
+            f"\nThis image corresponds to textbook page {page_number}. "
+            f"Do not output page numbers anywhere.\n"
+        )
         prompt = f"{base}{prior_block}{page_hint}"
 
         data_url = f"data:{mime};base64,{encoded_image}"
@@ -249,7 +280,6 @@ class PDFToMarkdownConverter:
             ],
         )
 
-        # 返回 Markdown
         return response.choices[0].message.content
 
 
