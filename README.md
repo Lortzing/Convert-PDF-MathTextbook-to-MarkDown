@@ -1,4 +1,4 @@
-# ctt2md · Convert Textbooks to Markdown
+# Convert PDF (MathTextbook) to MarkDown
 
 > 🚀 将数学类 PDF 教材自动转换为结构化 Markdown，并维持统一的章节层级与公式格式。
 
