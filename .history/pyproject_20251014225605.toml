@@ -14,8 +14,7 @@ dependencies = [
     "pdf2image>=1.17",
     "pillow>=10.0",
     "openai>=1.30",
-    "python-dotenv>=1.0",
-    "tqdm>=4.66"
+    "python-dotenv>=1.0"
 ]
 
 [project.scripts]

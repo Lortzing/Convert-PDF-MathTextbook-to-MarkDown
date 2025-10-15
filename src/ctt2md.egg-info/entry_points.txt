@@ -1,0 +1,2 @@
+[console_scripts]
+ctt2md = ctt2md.cli:main

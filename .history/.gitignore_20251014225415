@@ -6,4 +6,3 @@ venv/
 *.pdf
 *.png
 output/
-input/

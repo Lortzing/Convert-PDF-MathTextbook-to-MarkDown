@@ -58,6 +58,8 @@ class PDFToMarkdownConverter:
 
         images = self._pdf_to_images(pdf_path)
         iterable = tqdm(images, desc=f"Converting {pdf_path.name}", unit="page") if self.config.show_progress else images
+        
+        print(self.client.api_key, self.client.base_url, self.config.model)
 
         markdown_pages: List[str] = []
         for index, image in enumerate(iterable, start=1):
@@ -95,10 +97,13 @@ class PDFToMarkdownConverter:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
+                        {"type": "input_text", "text": prompt},
                         {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{f'image/{self.config.image_format.lower()}'};base64,{encoded_image}"},
+                            "type": "input_image",
+                            "image": {
+                                "data": encoded_image,
+                                "mime_type": f"image/{self.config.image_format.lower()}",
+                            },
                         },
                     ],
                 }

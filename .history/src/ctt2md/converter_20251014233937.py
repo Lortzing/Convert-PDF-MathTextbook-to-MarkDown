@@ -27,6 +27,7 @@ class ConversionConfig:
 
     model: str = "qwen3-vl-plus"
     dpi: int = 300
+    max_output_tokens: int | None = None
     prompt: str = PROMPT_TEMPLATE
     image_format: str = "PNG"
     extra_instructions: Sequence[str] = field(default_factory=tuple)
@@ -58,6 +59,8 @@ class PDFToMarkdownConverter:
 
         images = self._pdf_to_images(pdf_path)
         iterable = tqdm(images, desc=f"Converting {pdf_path.name}", unit="page") if self.config.show_progress else images
+        
+        print(self.client)
 
         markdown_pages: List[str] = []
         for index, image in enumerate(iterable, start=1):
@@ -89,25 +92,36 @@ class PDFToMarkdownConverter:
         encoded_image = base64.b64encode(image_stream.getvalue()).decode("utf-8")
         prompt = self.config.build_prompt() + f"\nThe content comes from page {page_number}."
 
-        response = self.client.chat.completions.create(
+        response = self.client.responses.create(
             model=self.config.model,
-            messages=[
+            input=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
+                        {"type": "input_text", "text": prompt},
                         {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{f'image/{self.config.image_format.lower()}'};base64,{encoded_image}"},
+                            "type": "input_image",
+                            "image": {
+                                "data": encoded_image,
+                                "mime_type": f"image/{self.config.image_format.lower()}",
+                            },
                         },
                     ],
                 }
-            ]
+            ],
+            max_output_tokens=self.config.max_output_tokens,
         )
 
+        if hasattr(response, "output_text"):
+            return response.output_text.strip()
 
         # Fallback for older response objects where content must be unpacked manually
-        return response.choices[0].message.content
+        return "\n".join(
+            item.get("text", "")
+            for choice in getattr(response, "output", [])
+            for item in getattr(choice, "content", [])
+            if item.get("type") == "output_text"
+        ).strip()
 
     # ------------------------------------------------------------------
     # Batch utilities

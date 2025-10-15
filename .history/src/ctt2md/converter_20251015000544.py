@@ -97,8 +97,11 @@ class PDFToMarkdownConverter:
                     "content": [
                         {"type": "text", "text": prompt},
                         {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{f'image/{self.config.image_format.lower()}'};base64,{encoded_image}"},
+                            "type": "input_image",
+                            "image": {
+                                "data": encoded_image,
+                                "mime_type": f"image/{self.config.image_format.lower()}",
+                            },
                         },
                     ],
                 }

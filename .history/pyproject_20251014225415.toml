@@ -7,15 +7,14 @@ name = "ctt2md"
 version = "0.1.0"
 description = "Convert math PDF textbooks to Markdown using Qwen 3 VL via OpenAI"
 readme = "README.md"
-authors = [{ name = "Lortzing" }]
+authors = [{ name = "Your Name", email = "you@example.com" }]
 license = { text = "MIT" }
 requires-python = ">=3.9"
 dependencies = [
     "pdf2image>=1.17",
     "pillow>=10.0",
     "openai>=1.30",
-    "python-dotenv>=1.0",
-    "tqdm>=4.66"
+    "python-dotenv>=1.0"
 ]
 
 [project.scripts]

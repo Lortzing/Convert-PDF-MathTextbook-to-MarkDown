@@ -53,6 +53,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     config = ConversionConfig(
         model=args.model or defaults.model,
         dpi=args.dpi or defaults.dpi,
+        max_output_tokens=args.max_output_tokens,
         extra_instructions=extra_instructions,
     )
     converter = PDFToMarkdownConverter(config=config)
