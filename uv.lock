@@ -53,6 +53,7 @@ dependencies = [
     { name = "pdf2image" },
     { name = "pillow" },
     { name = "python-dotenv" },
+    { name = "tqdm" },
 ]
 
 [package.metadata]
@@ -61,6 +62,7 @@ requires-dist = [
     { name = "pdf2image", specifier = ">=1.17" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "tqdm", specifier = ">=4.66" },
 ]
 
 [[package]]
