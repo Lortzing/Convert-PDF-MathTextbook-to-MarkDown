@@ -38,7 +38,7 @@ PROMPT_TEMPLATE = (
 
     # 内容包裹规则（只把真正正文包进 content）
     "Only the actual body content (paragraphs, equations, tables, figure placeholders) must be wrapped with "
-    "<|content|> ... </|content|>. Headings should be outside of this block as normal Markdown headings.\n"
+    "<content> ... </content>. Headings should be outside of this block as normal Markdown headings.\n"
 
     # 标题一致性规则 + 示例
     "Maintain STRICT heading-level consistency across pages:\n"
@@ -51,56 +51,53 @@ PROMPT_TEMPLATE = (
     # 其他
     "Ignore page numbers and running headers/footers. "
     "Use the main language in the picture to reply!!若带有中文则不要输出任何英文内容!!!（数学公式除外）"
-    "If the current page is not main body content — such as a cover page, table of contents, preface, bibliographic metadata, epilogue, or a blank page — return an empty <|content|> NOT MAIN BODY CONTENT </|content|> block only."
+    "If the current page is not main body content — such as a cover page, table of contents, preface, bibliographic metadata, epilogue, or a blank page — return an empty <content> NOT MAIN BODY CONTENT </content> block only."
 )
 
-# DeepSeek-R1 重整提示（必须删去非主体文本；保留页锚；返回 <|titles|> 分页标题）
+# DeepSeek-R1 重整提示（必须删去非主体文本；保留页锚；返回 <titles> 分页标题）
 DEEPSEEK_R1_REWRITE_PROMPT = """
-你是教材排版与结构一致性专家。给你若干页由 OCR/VL 模型输出的 Markdown 文本（每页用 <|page i|> ... </|page i|> 包裹，i 为页码）。
+你是教材排版与结构一致性专家。给你若干页由 OCR/VL 模型输出的 Markdown 文本（每页用 <page i> ... </page i> 包裹，i 为页码）。
 请对这些页面进行“重整”：严格执行以下规则，并逐页输出，**必须保留并按原顺序输出每个页边界标记**。
 
 【必须遵守的规则】
 1) 仅保留“标题 + 正文内容”两部分。删除任何非正文内容：页眉、页脚、提示语、说明性文字、注释、无关噪声等。
-2) 目录页处理：只保留真实标题/小节，**删除**点线（如“......”“···”）与任何页码；**标题末尾不得有页码或点线**。
-3) 标题对齐：在整个文档范围内保持标题层级一致（同类标题使用相同 # 数量）。已知历史标题（可能为空）如下：
-<|prior_titles|>
+2) 处理所有无意义的文字，包括"NOT MAIN BODY CONTENT"，"Content continues here but is truncated in the provided image"等，以及类似的无意义标记。
+3) 目录页处理：只保留真实标题/小节，**删除**点线（如“......”“···”）与任何页码；**标题末尾不得有页码或点线**。
+4) 标题对齐：在整个文档范围内保持标题层级一致（同类标题使用相同 # 数量）。已知历史标题（可能为空）如下：
+<prior_titles>
 {prior_titles}
-</|prior_titles|>
+</prior_titles>
 必须沿用相同层级策略，不得任意升级/降级。
-“章”使用二级标题，“节”使用二级标题，中文数字带顿号如“一、”使用三级标题，阿拉伯数字带点如“1.”使用四级标题，“1.1”等使用五级标题！！！若给出的titles出现层级/重复问题，请在回复的<|titles|> ... </|titles|>中修复
-4) 语言：若正文为中文，则**除数学公式外**不得出现任何英文词语或提示性句子。
-5) 数学：行内数学使用 $...$；块级数学使用 $$...$$。不要使用代码围栏。
-6) 输出结构约束（逐页）：
-   - 标题必须在 <|content|> 块之外。
-   - 正文（段落/表格/公式/图片占位）**必须且只能**出现在 <|content|> ... </|content|> 中。
+“章”使用二级标题，“节”使用二级标题，中文数字带顿号如“一、”使用三级标题，阿拉伯数字带点如“1.”使用四级标题，“1.1”等使用五级标题！！！若给出的titles出现层级/重复问题，请在回复的<titles> ... </titles>中修复，标题中不得出现页码如<page 1>等，应当一并去除
+5) 语言：若正文为中文，则**除数学公式外**不得出现任何英文词语或提示性句子。
+6) 数学：行内数学使用 $...$；块级数学使用 $$...$$。不要使用代码围栏。
+7) 输出结构约束（逐页）：
+   - 正文（段落/表格/公式/图片占位）**必须且只能**出现在 <content> ... </content> 中。
    - 每页输出都必须按以下模板：
-     <|page i|>
-     # 或 ### 等标题（如有；严禁含页码/点线）
-     <|content|>
-     （本页正文，仅正文）
-     </|content|>
-     </|page i|>
-7) 同时返回一个标题清单块，用于驱动后续页的层级对齐。**标题清单必须按页分组并保留页锚**，格式如下：
-<|titles|>
-<|page i|>
+     <page i>
+     # 或 ### 等标题（如有，没有不可随意添加！！；严禁含页码/点线）
+     本页正文，仅正文
+     </page i>
+8) 同时返回一个标题清单块，用于驱动后续页的层级对齐。**标题清单必须按页分组并保留页锚**，格式如下：
+<titles>
 # 一级标题
 ## 二级标题
 ### 三级标题
-</|page i|>
 ...
-</|titles|>
+</titles>
+不应包含<page i>等
 
-请对输入各页做就地重整，严格遵守以上约束：
-- 逐页输出并保留 <|page i|> ... </|page i|>；
-- 最后附上 <|titles|> ... </|titles|>，其中每页子块按页锚分组，标题行只包含以 # 起始的 Markdown 标题。
+9) 请对输入各页做就地重整，严格遵守以上约束：
+- 逐页输出并保留 <page i> ... </page i>；
+- 最后附上 <titles> ... </titles>，其中每页子块按页锚分组，标题行只包含以 # 起始的 Markdown 标题。
 不要添加任何其他注释/解释。
 """.strip()
 
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+?)\s*$', re.M)
-_CONTENT_RE = re.compile(r"<\|content\|>(.*?)</\|content\|>", re.S | re.I)
+_CONTENT_RE = re.compile(r"<\|content\>(.*?)</\|content\>", re.S | re.I)
 # 页块：起止标签都带页码（严格锚定）
-_PAGE_SPLIT_RE = re.compile(r"<\|page\s+(\d+)\|>(.*?)</\|page\s+\1\|>", re.S | re.I)
-_TITLES_BLOCK_RE = re.compile(r"<\|titles\|>(.*?)</\|titles\|>", re.S | re.I)
+_PAGE_SPLIT_RE = re.compile(r"<\|page\s+(\d+)\>(.*?)</\|page\s+\1\>", re.S | re.I)
+_TITLES_BLOCK_RE = re.compile(r"<\|titles\>(.*?)</\|titles\>", re.S | re.I)
 
 # -------------------- CONFIG --------------------
 
@@ -200,10 +197,10 @@ class PDFToMarkdownConverter:
         # 3) R1 重整（窗=5，步=3，仅采纳后3页；未覆盖到的页用 Qwen 结果兜底）
         refined_md_per_page = await self._refine_with_sliding_windows(qwen_md_per_page)
 
-        # 4) 从 R1 批次输出中的 <|titles|> 增量更新全局 titles；对每页抽取标题兜底
+        # 4) 从 R1 批次输出中的 <titles> 增量更新全局 titles；对每页抽取标题兜底
         await self._rebuild_global_titles_from_pages(refined_md_per_page)
 
-        # 5) 落盘：先输出 <|titles|>（按页分组），再按页输出 <|page i|> … </|page i|>
+        # 5) 落盘：先输出 <titles>（按页分组），再按页输出 <page i> … </page i>
         if output_path is not None:
             titles_block = self._build_titles_block_grouped()
             pages_block = self._build_pages_with_markers(refined_md_per_page)
@@ -253,8 +250,8 @@ class PDFToMarkdownConverter:
         - 窗口大小固定 5（若不足，则平移起点使窗口仍为 5）
         - 每次只采纳窗口的“后 3 页”作为本次有效重整结果
         - 窗口步长 3（覆盖所有 3..N 页；1、2 页由 Qwen 结果兜底）
-        - 始终保留 <|page i|>…</|page i|> 标记
-        - 同步更新全局 titles：优先使用 <|titles|> 块的分页面标题；否则用页内标题兜底
+        - 始终保留 <page i>…</page i> 标记
+        - 同步更新全局 titles：优先使用 <titles> 块的分页面标题；否则用页内标题兜底
         """
         N = len(md_pages)
         refined = md_pages[:]  # 默认先放 Qwen 结果（用于 1、2 页兜底）
@@ -286,7 +283,7 @@ class PDFToMarkdownConverter:
 
             try:
                 refined_chunk = await asyncio.to_thread(self._call_deepseek_refine, prompt, packed_text)
-                # 解析出分页内容 & <|titles|>
+                # 解析出分页内容 & <titles>
                 per_page_map = self._split_pages_by_marker(refined_chunk)      # Dict[int, str]
                 titles_by_page = self._parse_titles_block_grouped(refined_chunk)  # Dict[int, List[str]]
 
@@ -331,17 +328,17 @@ class PDFToMarkdownConverter:
         return refined
 
     def _pack_pages_with_markers(self, pages_md: List[str], pages_nums: List[int]) -> str:
-        """把若干页打包，并加上严格闭合的 <|page i|> … </|page i|> 边界（输入 R1）。"""
+        """把若干页打包，并加上严格闭合的 <page i> … </page i> 边界（输入 R1）。"""
         blocks = []
         for pno, md in zip(pages_nums, pages_md):
             md = md.strip()
             # 确保页内不含旧的页锚，避免嵌套
             md = _PAGE_SPLIT_RE.sub(lambda _: "", md)
-            blocks.append(f"<|page {pno}|>\n{md}\n</|page {pno}|>")
+            blocks.append(f"<page {pno}>\n{md}\n</page {pno}>")
         return "\n\n".join(blocks)
 
     def _build_pages_with_markers(self, refined_md_per_page: List[str]) -> str:
-        """落盘：将每页内容用 <|page i|> … </|page i|> 包裹并串联。"""
+        """落盘：将每页内容用 <page i> … </page i> 包裹并串联。"""
         blocks = []
         for i, md in enumerate(refined_md_per_page, start=1):
             body = md.strip()
@@ -349,7 +346,7 @@ class PDFToMarkdownConverter:
             m = _PAGE_SPLIT_RE.search(body)
             if m and int(m.group(1)) == i:
                 body = m.group(2).strip()
-            blocks.append(f"<|page {i}|>\n{body}\n</|page {i}|>")
+            blocks.append(f"<page {i}>\n{body}\n</page {i}>")
         return "\n\n".join(blocks)
 
     def _call_deepseek_refine(self, prompt: str, chunk_text: str) -> str:
@@ -365,17 +362,17 @@ class PDFToMarkdownConverter:
         return resp.choices[0].message.content or ""
 
     def _split_pages_by_marker(self, text: str) -> Dict[int, str]:
-        """从文本中按严格页锚提取每页块（含“标题 + <|content|>正文”）。"""
+        """从文本中按严格页锚提取每页块（含“标题 + <content>正文”）。"""
         out: Dict[int, str] = {}
         for m in _PAGE_SPLIT_RE.finditer(text):
             pno = int(m.group(1))
             body = m.group(2).strip()
-            out[pno] = f"<|page {pno}|>\n{body}\n</|page {pno}|>"
+            out[pno] = f"<page {pno}>\n{body}\n</page {pno}>"
         return out
 
     def _parse_titles_block_grouped(self, text: str) -> Dict[int, List[str]]:
         """
-        解析 R1 返回的 <|titles|> 块（按页分组，每页仍用 <|page i|> … </|page i|>）。
+        解析 R1 返回的 <titles> 块（按页分组，每页仍用 <page i> … </page i>）。
         返回：{page_no: ["# A", "## B", ...]}
         """
         res: Dict[int, List[str]] = {}
@@ -397,7 +394,7 @@ class PDFToMarkdownConverter:
         return res
 
     async def _set_titles_for_pages(self, titles_by_page: Dict[int, List[str]]) -> None:
-        """使用 R1 返回的 <|titles|> 覆盖更新指定页的标题集合（全局去重策略生效）。"""
+        """使用 R1 返回的 <titles> 覆盖更新指定页的标题集合（全局去重策略生效）。"""
         if not titles_by_page:
             return
         async with self._titles_lock:
@@ -423,7 +420,7 @@ class PDFToMarkdownConverter:
 
     async def _rebuild_global_titles_from_pages(self, refined_md_per_page: List[str]) -> None:
         """
-        若某些页未被 <|titles|> 覆盖，则从该页内容再抽取标题兜底，保证最终 titles 完整。
+        若某些页未被 <titles> 覆盖，则从该页内容再抽取标题兜底，保证最终 titles 完整。
         """
         async with self._titles_lock:
             covered = set(self._titles_by_page.keys())
@@ -505,7 +502,7 @@ class PDFToMarkdownConverter:
 
     async def _update_titles(self, page_number: int, page_titles: List[str]) -> None:
         """
-        兜底：当某页未被 <|titles|> 覆盖时，从页内解析并合并；保持全局去重策略。
+        兜底：当某页未被 <titles> 覆盖时，从页内解析并合并；保持全局去重策略。
         """
         async with self._titles_lock:
             if self.config.dedup_titles:
@@ -561,28 +558,28 @@ class PDFToMarkdownConverter:
             out.append(line)
         return out
 
-    # ---------- 构建 <|titles|> 与分页面输出 ----------
+    # ---------- 构建 <titles> 与分页面输出 ----------
 
     def _build_titles_block_grouped(self) -> str:
         """
         将全局 titles 按页分组输出为：
-        <|titles|>
-        <|page i|>
+        <titles>
+        <page i>
         # ...
         ## ...
-        </|page i|>
+        </page i>
         ...
-        </|titles|>
+        </titles>
         """
-        parts = ["<|titles|>"]
+        parts = ["<titles>"]
         with_pages = sorted(self._titles_by_page.items(), key=lambda kv: kv[0])
         for pno, lines in with_pages:
             if not lines:
                 continue
-            parts.append(f"<|page {pno}|>")
+            parts.append(f"<page {pno}>")
             parts.extend(lines)
-            parts.append(f"</|page {pno}|>")
-        parts.append("</|titles|>")
+            parts.append(f"</page {pno}>")
+        parts.append("</titles>")
         return "\n".join(parts).strip()
 
 
