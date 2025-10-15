@@ -5,8 +5,11 @@ __pycache__/
 venv/
 *.pdf
 *.png
+*.md
 output/
 input/
 
 
 .history/
+
+!README.md
