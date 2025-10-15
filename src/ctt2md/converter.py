@@ -6,6 +6,7 @@ import os
 import re
 import base64
 import asyncio
+import unicodedata
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -38,10 +39,19 @@ PROMPT_TEMPLATE = (
     "Only the actual body content (paragraphs, equations, tables, figure placeholders) must be wrapped with "
     "<|content|> ... </|content|>. Headings should be outside of this block as normal Markdown headings.\n"
 
+    # 标题一致性规则 + 示例
+    "Maintain STRICT heading-level consistency across pages:\n"
+    "- If 'Chapter 1' used level-1 '#', then 'Chapter 2' MUST also use level-1 '#'.\n"
+    "- If Arabic-numbered headings like '2.3 Gaussian Elimination' used level-3 '###', then "
+    "subsequent headings like '3.1 ...' and '3.2 ...' MUST also use level-3 '###'.\n"
+    "- Do NOT downgrade/upgrade heading levels arbitrarily between pages.\n"
+    "- Never include page numbers, dot leaders, or trailing dots in headings.\n"
+
     # 其他
-    "Ignore page numbers and running headers/footers."
-    "Use the main language in the picture to reply!!"
+    "Ignore page numbers and running headers/footers. "
+    "Use the main language in the picture to reply!!若带有中文则不要输出任何英文内容!!!（数学公式除外）"
 )
+
 
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+?)\s*$', re.M)  # 匹配 #/##/... 标题行
 _CONTENT_RE = re.compile(r"<\|content\|>(.*?)</\|content\|>", re.S | re.I)  # 提取 content 块（允许多段）
@@ -58,6 +68,11 @@ class ConversionConfig:
     extra_instructions: Sequence[str] = field(default_factory=tuple)
     show_progress: bool = True
     image2md_concurrency: int = 20  # 并发上限
+
+    dedup_titles: bool = True
+    # "level_text": 同层级同标题才判为重复（更保守，默认）
+    # "text": 忽略层级，只要标题文本相同就认为重复（更激进）
+    dedup_strategy: str = "level_text"
 
     def build_prompt(self) -> str:
         if not self.extra_instructions:
@@ -81,6 +96,7 @@ class PDFToMarkdownConverter:
         self._titles_lock = asyncio.Lock()
         self._titles_by_page: Dict[int, List[str]] = {}
         self.titles = []  # 以 "\n" 间隔拼接时使用："\n".join(self.titles)
+        self._seen_title_keys: set[str] = set()
 
     # -----------------------------
     # 对外：同步入口（兼容你现有调用方式）
@@ -126,7 +142,7 @@ class PDFToMarkdownConverter:
         # 3) 持久化（线程池异步化）
         if output_path is not None:
             # 先输出全量标题，再输出正文
-            titles_block = "\n".join(self.titles).strip()
+            titles_block = "<|title_start|>\n" + "\n".join(self.titles).strip() + "\n<|title_end|>"
             content_block = "\n\n".join(c.strip() for c in contents_only if c and c.strip())
             final_text = (titles_block + "\n\n" + content_block).strip() if titles_block else content_block
             await asyncio.to_thread(output_path.write_text, final_text, encoding="utf-8")
@@ -195,8 +211,7 @@ class PDFToMarkdownConverter:
         return streams
 
     # ---- 标题/内容抽取与维护 ----
-    @staticmethod
-    def _extract_titles(md: str) -> List[str]:
+    def _extract_titles(self, md: str) -> List[str]:
         """
         从 Markdown 文本中抽取 '#/##/...' 标题行，保持出现顺序。
         只返回完整标题行（含 # 前缀），用于直接拼接。
@@ -214,7 +229,8 @@ class PDFToMarkdownConverter:
             if re.search(r'\(\s*\d+\s*\)\s*$', text):
                 continue
             titles.append(f"{level} {text}")
-        return titles
+        deduped = self._dedup_titles_list(titles)
+        return deduped
 
     @staticmethod
     def _extract_content(md: str) -> str:
@@ -240,30 +256,51 @@ class PDFToMarkdownConverter:
     async def _update_titles(self, page_number: int, page_titles: List[str]) -> None:
         """
         写回本页标题，并重建 self.titles（全量标题，按页序、用 '\\n' 间隔）。
+        新增：全局去重（只保留首见的标题），配置可控。
         """
         async with self._titles_lock:
-            self._titles_by_page[page_number] = page_titles
+            # 1) 页内去重已在 _extract_titles 做过；这里进一步做 **全局去重**
+            if self.config.dedup_titles:
+                filtered: List[str] = []
+                for line in page_titles:
+                    m = _HEADING_RE.match(line)
+                    if not m:
+                        continue
+                    level, text = m.group(1), m.group(2).strip()
+                    key = self._title_key(level, text)
+                    if key in self._seen_title_keys:
+                        continue
+                    self._seen_title_keys.add(key)
+                    filtered.append(line)
+                self._titles_by_page[page_number] = filtered
+            else:
+                self._titles_by_page[page_number] = page_titles
+
+            # 2) 重建全量 titles（保持页序）
             lines: List[str] = []
             for p in sorted(self._titles_by_page.keys()):
                 lines.extend(self._titles_by_page[p])
             self.titles = lines  # 使用时通过 "\n".join(self.titles)
 
+
     def _image_to_markdown(self, image_stream: BytesIO, page_number: int, prior_titles_text: str) -> str:
-        """Send an image to the Qwen model and return Markdown output."""
         encoded_image = base64.b64encode(image_stream.getvalue()).decode("utf-8")
         mime = f"image/{self.config.image_format.lower()}"
 
-        # Prompt 组合
         base = self.config.build_prompt()
         prior_block = (
             f"\nPreviously seen titles (keep levels consistent and avoid duplicates):\n{prior_titles_text}\n"
             if prior_titles_text else ""
         )
+
+        schema_hint = "“章”使用二级标题，“节”使用二级标题，中文数字带顿号如“一、”使用三级标题，阿拉伯数字带点如“1.”使用四级标题，“1.1”等使用五级标题！！！"
+
         page_hint = (
             f"\nThis image corresponds to textbook page {page_number}. "
             f"Do not output page numbers anywhere.\n"
         )
-        prompt = f"{base}{prior_block}{page_hint}"
+
+        prompt = f"{base}\n{schema_hint}{prior_block}{page_hint}"
 
         data_url = f"data:{mime};base64,{encoded_image}"
 
@@ -286,6 +323,65 @@ class PDFToMarkdownConverter:
         )
 
         return response.choices[0].message.content
+    
+        # NEW ----------
+    def _normalize_title_text(self, text: str) -> str:
+        """
+        规范化标题文本用于去重：
+        - NFKC 统一宽/半角与兼容字符
+        - 去掉首尾空白、压缩多空白
+        - 去除末尾常见分隔/标点（.,，。:：；;、·…—- 等）
+        - 再小写（英文有效，中文不受影响）
+        - 额外兜底去掉可能残留的目录点线“……”“···”之类
+        """
+        t = unicodedata.normalize("NFKC", text)
+        t = re.sub(r"\s+", " ", t).strip()
+
+        # 去掉目录点线与可能残留的页码（兜底；主过滤在 _extract_titles 已做）
+        t = re.sub(r"(?:\.{3,}|·{2,})\s*\d+\s*$", "", t).strip()
+        t = re.sub(r"\(\s*\d+\s*\)\s*$", "", t).strip()
+
+        # 去掉结尾的标点/连字符/省略号等
+        t = re.sub(r"[\s\.\u3002、，,：:；;—\-·…]+$", "", t).strip()
+
+        # 统一英文大小写（中文不受影响）
+        t = t.lower()
+        return t
+
+    # NEW ----------
+    def _title_key(self, level: str, text: str) -> str:
+        """
+        根据配置生成标题去重 key。
+        - level 形如 '#', '##', ...
+        - text 为原始文本（本函数内部会做规范化）
+        """
+        norm = self._normalize_title_text(text)
+        if self.config.dedup_strategy == "text":
+            return norm
+        # 默认：包含层级信息，更保守，避免 "绪论" 在不同层级被误杀
+        return f"{len(level)}|{norm}"
+
+    # NEW ----------
+    def _dedup_titles_list(self, titles: List[str]) -> List[str]:
+        """
+        对“单页标题列表”先做**页内去重**：
+        输入 titles 形如 ["# A", "## B", "## B", "# A"]
+        按配置算 key，保留首见，保持顺序。
+        """
+        seen: set[str] = set()
+        out: List[str] = []
+        for line in titles:
+            m = _HEADING_RE.match(line)
+            if not m:
+                continue
+            level, text = m.group(1), m.group(2).strip()
+            key = self._title_key(level, text)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(line)
+        return out
+
 
 
 __all__ = ["PDFToMarkdownConverter", "ConversionConfig"]
