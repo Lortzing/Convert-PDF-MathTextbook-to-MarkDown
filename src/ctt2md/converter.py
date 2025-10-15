@@ -55,31 +55,33 @@ PROMPT_TEMPLATE = (
 )
 
 # Refine 模型提示（删去非正文；严格页锚；返回 <titles>）
+# -------------------- MODIFY: REFINE_REWRITE_PROMPT --------------------
 REFINE_REWRITE_PROMPT = """
 你是教材排版与结构一致性专家。给你若干页由 OCR/VL 模型输出的 Markdown 文本（每页用 <page i> ... </page i> 包裹，i 为页码）。
 请对这些页面进行“重整”：严格执行以下规则，并逐页输出，**必须保留并按原顺序输出每个页边界标记**。
 
 【必须遵守的规则】
 1) 仅保留“标题 + 正文内容”两部分。删除任何非正文内容：页眉、页脚、提示语、说明性文字、注释、无关噪声等；清除诸如“NOT MAIN BODY CONTENT”“Content continues here but is truncated...” 等无意义文本。
-2) 目录页（或前言/版权/致谢等非正文页）：正文应为空（如有内容也应清除），标题若存在需按规则纠正。
-3) 标题对齐：在整个文档范围内保持标题层级一致（同类标题使用相同 # 数量）。已知历史标题（可能为空）如下：
+2) 目录页（或前言/版权/致谢等非正文页）：正文应为空（如有内容也应清除），若某一页几乎全是标题行，即将其认定为目录页，直接划为空白。
+3) 标题对齐：**在整个文档范围内保持标题层级一致（同类标题使用相同 # 数量）**。已知历史标题（可能为空）如下：
 <prior_titles>
 {prior_titles}
 </prior_titles>
-你需要在本批页面中沿用相同层级策略，不得任意升级/降级。
+
+你**必须**在最终的 <titles> 中覆盖上述 prior_titles 中所有唯一、有意义的条目（若层级有误应予以纠正）。
 同时做如下事：
-    1. 如果先前的标题中有重复、无意义内容，请直接去除，并重整标题的顺序，做到一致
-    2. 如果当前页面含有先前标题中没有的标题吃，应当添加到<titles>中
-    3. 保持标题层级一致，并修正错误的标题，可能可采取的条件如下：
-        “章”使用二级标题，“节”使用二级标题，中文数字带顿号如“一、”使用三级标题，阿拉伯数字带点如“1.”使用四级标题，“1.1”等使用五级标题！！！
-    4. 去掉无意义内容，以及前言、目录等内容，最后总结出一个相应的titles
-    
-4) 数学：行内数学使用 $...$；块级数学使用 \n$$...$$\n。不要使用代码围栏。
-5) 输出结构约束（逐页）：
-   每页输出必须为如下结构；若正文应为空仍须给出空的 <page i>）：
+    1. 若先前的标题中有重复或无意义内容，请剔除并重排，保持一致性；
+    2. 若本批页面出现先前没有的新标题，请补充到 <titles>；
+    3. 层级规则建议：中文“章”用一级标题；中文“节”用二级标题；“一、二、三、...”用三级标题；“1.”用五级；“1.1/1.1.1”用四/五级；“例”使用****包裹即可（若你判断更合理，可统一修正，但需全局一致）；
+    4. 去掉前言、目录等无关内容。
+    5. 章节一般不会单独成章，如遇"# 第一章/n ## 函数与极限"这些结构，应改为"# 第一章 函数与极限"，并以此调整后续章节标题等级
+
+4) 数学：行内 $...$；块级以独占行 $$...$$；不要使用代码围栏。
+5) 输出结构约束（逐页）：每页输出必须为如下结构；若正文应为空仍须给出空的 <page i>：
    <page i>
-   仅正文；无正文则留空
+   标题（若有）与正文（若有）。**在 <page i> 内禁止出现 <content> 标签**；直接输出纯 Markdown。
    </page i>
+
 6) 返回最后一个**全局标题清单**，格式：
 <titles>
 # 一级标题
@@ -87,10 +89,12 @@ REFINE_REWRITE_PROMPT = """
 ### 三级标题
 ...
 </titles>
-（注意：此处**不包含**任何 <page i>，不可重复，不应保留无用字段）
+（注意：此处**不包含**任何 <page i>，不可重复，不应保留无用标题）
 
-请对输入各页做就地重整，严格遵守以上约束：逐页输出并保留 <page i> ... </page i>，最后附上 <titles> ... </titles>。不要添加任何其他注释/解释。
+严格遵守以上约束：逐页输出并保留 <page i> ... </page i>，最后附上仅一次的 <titles> ... </titles>，从中总结所有上述的标题，保持规整与对齐。不要添加任何其它注释/解释。
 """.strip()
+
+
 
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+?)\s*$', re.M)
 _CONTENT_RE = re.compile(r"<content>(.*?)</content>", re.S | re.I)
@@ -115,9 +119,9 @@ class ConversionConfig:
     # Refine（异步并行窗口）
     refine_enabled: bool = True
     refine_model: str = "qwen-plus"
-    refine_window_size: int = 30       # 窗口大小 W
-    refine_keep_tail: int = 30         # 仅采纳“后 K 页”
-    refine_step: int = 30               # 步长 S（滑动窗口）
+    refine_window_size: int = 50       # 窗口大小 W
+    refine_keep_tail: int = 59         # 仅采纳“后 K 页”
+    refine_step: int = 50              # 步长 S（滑动窗口）
     refine_concurrency: int = 6        # 重整并发上限
 
     def build_prompt(self) -> str:
@@ -307,7 +311,7 @@ class PDFToMarkdownConverter:
             # ★ 把本窗 titles 拼接进全局 —— 下一个窗口才允许开始
             if titles_list:
                 async with self._titles_lock:
-                    self._titles_global.extend(titles_list)
+                    self._titles_global = titles_list
 
             if pbar_refine:
                 pbar_refine.update(1)
