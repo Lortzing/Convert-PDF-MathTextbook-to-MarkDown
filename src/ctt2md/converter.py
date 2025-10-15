@@ -144,7 +144,7 @@ class ConversionConfig:
     refine_enabled: bool = True
     refine_model: str = "qwen-plus"
     refine_window_size: int = 50       # 窗口大小 W
-    refine_keep_tail: int = 59         # 仅采纳“后 K 页”
+    refine_keep_tail: int = 50         # 仅采纳“后 K 页”
     refine_step: int = 50              # 步长 S（滑动窗口）
     refine_concurrency: int = 6        # 重整并发上限（用于 Phase B 的页内并发占位）
 
