@@ -40,6 +40,7 @@ PROMPT_TEMPLATE = (
 
     # 其他
     "Ignore page numbers and running headers/footers."
+    "Use the main language in the picture to reply!!"
 )
 
 _HEADING_RE = re.compile(r'^(#{1,6})\s+(.+?)\s*$', re.M)  # 匹配 #/##/... 标题行
@@ -278,6 +279,10 @@ class PDFToMarkdownConverter:
                     ],
                 }
             ],
+            extra_body={
+                'enable_thinking': True,
+                "thinking_budget": 500
+            },
         )
 
         return response.choices[0].message.content
