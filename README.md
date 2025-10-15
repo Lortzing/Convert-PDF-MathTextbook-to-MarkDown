@@ -51,9 +51,10 @@
 ## 📦 安装
 
 ```bash
-python -m venv .venv
+uv init
+uv sync
 source .venv/bin/activate  # Windows 使用 .venv\Scripts\activate
-pip install -e .
+uv pip install -e .
 ```
 
 项目依赖已在 `pyproject.toml` 中声明，包括 `pdf2image`、`openai`、`python-dotenv` 与 `tqdm`。
