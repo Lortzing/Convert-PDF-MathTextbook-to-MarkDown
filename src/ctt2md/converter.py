@@ -203,6 +203,11 @@ class PDFToMarkdownConverter:
 
     # ---------------- 内部：主流程 ----------------
     async def _convert_async(self, pdf_path: str | Path, *, output_path: str | Path | None = None) -> List[str]:
+        
+        self._titles_lock = asyncio.Lock()
+        self._titles_global: List[str] = []
+        self._policy_global: str = ""
+        
         pdf_path = Path(pdf_path)
         if output_path is not None:
             output_path = Path(output_path)
